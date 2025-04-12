@@ -13,5 +13,5 @@ name = "nexus_emotes"
 log = "0.4.27"
 
 [dependencies.nexus]
-path = "../nexus-rs/nexus"
-features = ["log", "extras", "log_filter"]
+git = "https://github.com/belst/nexus-rs"
+features = ["log", "extras", "log_filter", "arcdps"]

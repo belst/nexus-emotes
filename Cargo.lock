@@ -261,6 +261,7 @@ dependencies = [
 [[package]]
 name = "nexus"
 version = "0.7.0"
+source = "git+https://github.com/belst/nexus-rs#99764a43fb333196ec3dba138aeeebd32662c06b"
 dependencies = [
  "arcdps",
  "arcdps-imgui",
@@ -276,6 +277,7 @@ dependencies = [
 [[package]]
 name = "nexus_codegen"
 version = "0.3.0"
+source = "git+https://github.com/belst/nexus-rs#99764a43fb333196ec3dba138aeeebd32662c06b"
 dependencies = [
  "cfg-if",
  "env_filter",
