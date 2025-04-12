@@ -1,13 +1,13 @@
 [package]
-name = "mememessage"
-version = "1.2.2"
-edition = "2021"
+name = "nexus_emotes"
+version = "0.0.1"
+edition = "2024"
 authors = ["belst"]
-description = "New Squad Message Viewer, that displays twitch emotes"
+description = "New Squad Message Viewer with emote support"
 
 [lib]
 crate-type = ["cdylib"]
-name = "mememessage"
+name = "nexus_emotes"
 
 [dependencies]
 log = "0.4.27"
