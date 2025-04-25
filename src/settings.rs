@@ -1,4 +1,3 @@
-use crate::seventv::EmoteSet;
 use crate::util::e;
 use anyhow::Result;
 use nexus::imgui::Ui;

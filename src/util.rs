@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use nexus::{
     imgui::{StyleColor, Ui},
     localization::translate,

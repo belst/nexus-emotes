@@ -11,7 +11,7 @@ pub struct Owner {
     pub display_name: String,
     pub avatar_url: String,
     pub style: Value,
-    pub roles: Vec<String>,
+    // pub role_: Vec<String>,
 }
 
 // Enum for File.format with variants for "AVIF" and "WEBP".
@@ -53,7 +53,7 @@ pub struct EmoteData {
     pub state: Vec<String>,
     pub listed: bool,
     pub animated: bool,
-    pub owner: Owner,
+    // pub owner: Owner,
     pub host: Host,
 }
 
@@ -80,10 +80,11 @@ pub struct EmoteSet {
     pub emotes: Vec<Emote>,
     pub emote_count: u32,
     pub capacity: u32,
-    pub owner: Owner,
+    // pub owner: Owner,
 }
 
 pub fn get_emotes(emote_id: &str) -> Result<EmoteSet> {
+    log::info!("Downloading emote set {}", emote_id);
     let url = format!("https://7tv.io/v3/emote-sets/{}", emote_id);
 
     let emote_set = ureq::get(&url).call()?.body_mut().read_json()?;

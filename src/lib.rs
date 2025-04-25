@@ -5,11 +5,10 @@ use nexus::arcdps::extras::message::{ChatMessageInfo, ChatMessageInfoOwned, RawC
 use nexus::data_link::read_nexus_link;
 use nexus::event_consume;
 use nexus::gui::{RenderType, register_render, render};
-use nexus::imgui::{Condition, Image, StyleVar, TextureId, Ui, Window};
+use nexus::imgui::{Condition, Image, Ui, Window};
 use nexus::paths::get_addon_dir;
-use nexus::texture::{Texture, get_texture, get_texture_or_create_from_url};
+use nexus::texture::{get_texture, get_texture_or_create_from_url};
 use nexus::{AddonFlags, UpdateProvider, event::extras::CHAT_MESSAGE};
-use rand::prelude::*;
 use settings::{Diff, Settings};
 use seventv::{EmoteSet, File, FileFormat, download_emote_sets, get_emotes};
 use std::cell::Cell;
@@ -34,11 +33,12 @@ struct ActiveEmote {
     identifier: String,
     position: Option<[f32; 2]>,
     start: Option<Instant>,
+    start_offset: f32,
 }
 
+const SPEED: f32 = 0.5;
 impl ActiveEmote {
     fn simulate(&mut self, elapsed: f32) {
-        const SPEED: f32 = 50.0;
         if let Some(position) = self.position {
             let [x, y] = position;
             self.position = Some([x, y - SPEED * elapsed]);
@@ -47,7 +47,10 @@ impl ActiveEmote {
     fn get_position(&self, padding_width: f32) -> [f32; 2] {
         let position = self.position.unwrap_or([0.0, 0.0]);
         [
-            position[0] + (self.start.unwrap().elapsed().as_millis() as f32).sin() * padding_width,
+            position[0]
+                + (self.start_offset + self.start.unwrap().elapsed().as_millis() as f32 / 1000.0)
+                    .sin()
+                    * padding_width,
             position[1],
         ]
     }
@@ -195,23 +198,26 @@ fn process_message(chat: ChatMessageInfoOwned) {
     for word in chat.text.split_whitespace() {
         for emote in emote_sets.iter().flat_map(|e| e.emotes.iter()) {
             if emote.name == word {
+                log::info!("Found emote {} in chat message", word);
                 let identifier = format!("EMOTE_{word}");
                 ACTIVE_EMOTES.lock().unwrap().push(ActiveEmote {
                     identifier: identifier.clone(),
                     position: None,
                     start: None,
+                    start_offset: rand::random(),
                 });
                 if loaded.contains(&identifier) {
                     continue;
                 }
+                log::info!("Loading emote {}", word);
                 if let Some(file) = find_file(&emote.data.host.files) {
                     let Ok(url) = url::Url::parse(&format!("https:{}/", emote.data.host.url))
                     else {
                         log::error!("Failed to parse url: {}", emote.data.host.url);
                         continue;
                     };
-                    let Ok(url) = url.join(&file.static_name) else {
-                        log::error!("Failed to join url: {}", file.static_name);
+                    let Ok(url) = url.join(&file.name) else {
+                        log::error!("Failed to join url: {}", file.name);
                         continue;
                     };
                     // just trigger load
