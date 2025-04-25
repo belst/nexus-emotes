@@ -1,222 +1,81 @@
+#![feature(lock_value_accessors)]
+
+use background::{RunningWorker, Worker};
 use nexus::arcdps::extras::message::{ChatMessageInfo, ChatMessageInfoOwned, RawChatMessageInfo};
+use nexus::data_link::read_nexus_link;
 use nexus::event_consume;
 use nexus::gui::{RenderType, register_render, render};
-use nexus::imgui::{Image, StyleVar, Ui, Window};
+use nexus::imgui::{Condition, Image, StyleVar, TextureId, Ui, Window};
 use nexus::paths::get_addon_dir;
-use nexus::texture::{Texture, get_texture, get_texture_or_create_from_file};
+use nexus::texture::{Texture, get_texture, get_texture_or_create_from_url};
 use nexus::{AddonFlags, UpdateProvider, event::extras::CHAT_MESSAGE};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::{Path, PathBuf};
+use rand::prelude::*;
+use settings::{Diff, Settings};
+use seventv::{EmoteSet, File, FileFormat, download_emote_sets, get_emotes};
+use std::cell::Cell;
+use std::ops::RangeInclusive;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
-fn emote_path() -> PathBuf {
+mod background;
+mod settings;
+mod seventv;
+mod util;
+
+fn setting_path() -> PathBuf {
     get_addon_dir(env!("CARGO_PKG_NAME"))
         .expect("Addon dir to exist")
-        .join("emotes")
+        .join("settings.json")
 }
 
 #[derive(Debug, Clone)]
-enum Span {
-    Emote(EmoteSpan),
-    Text(String),
+struct ActiveEmote {
+    identifier: String,
+    position: Option<[f32; 2]>,
+    start: Option<Instant>,
 }
 
-#[derive(Debug, Clone)]
-struct ProcessedMessage {
-    chat: ChatMessageInfoOwned,
-    spans: Vec<Span>,
-    has_emotes: bool,
-}
-
-fn calculate_relative_luminance(c: [f32; 4]) -> f32 {
-    (0.2126 * c[0]) + (0.7152 * c[1]) + (0.0722 * c[2])
-}
-
-// TODO: revisit and fix
-fn acc_name_to_color(acc_name: impl Hash, bg_rel_luminance: f32) -> [f32; 4] {
-    let mut hasher = DefaultHasher::new();
-    acc_name.hash(&mut hasher);
-    let hash = hasher.finish();
-    let r = (hash & 0xFF) as f32 / 255.0;
-    let g = ((hash >> 8) & 0xFF) as f32 / 255.0;
-    let b = ((hash >> 16) & 0xFF) as f32 / 255.0;
-    let mut c = [r, g, b, 1.0];
-    let luminance = calculate_relative_luminance(c);
-    let (dark, bright, darken) = if bg_rel_luminance < luminance {
-        (bg_rel_luminance, luminance, false)
-    } else {
-        (luminance, bg_rel_luminance, true)
-    };
-    let ratio = (bright + 0.05) / (dark + 0.05);
-    if ratio <= 7.0 {
-        let bright_prime = (7.0 * (dark + 0.05) - 0.05).min(1.0);
-        let scaling_factor = if darken {
-            bright_prime / bright
-        } else {
-            bright / bright_prime
-        };
-        c[0] = c[0] * scaling_factor;
-        c[1] = c[1] * scaling_factor;
-        c[2] = c[2] * scaling_factor;
-    }
-    c
-}
-
-const MAX_EMOTE_HEIGHT: f32 = 28.0;
-fn get_emote_size(texture: &Texture) -> [f32; 2] {
-    let aspect_ratio = texture.width as f32 / texture.height as f32;
-    if texture.height as f32 > MAX_EMOTE_HEIGHT {
-        [MAX_EMOTE_HEIGHT * aspect_ratio, MAX_EMOTE_HEIGHT]
-    } else {
-        [texture.width as f32, texture.height as f32]
-    }
-}
-
-impl ProcessedMessage {
-    fn new(chat: ChatMessageInfoOwned, emotes: &'static [Emote]) -> Self {
-        let mut spans = vec![];
-        let mut has_emotes = false;
-        for word in chat.text.split_whitespace() {
-            spans.push(
-                if let Some(e) = emotes.iter().find(|em| em.matcher == word) {
-                    has_emotes = true;
-                    Span::Emote(EmoteSpan { emote: e })
-                } else {
-                    Span::Text(word.to_string())
-                },
-            );
-        }
-        Self {
-            chat,
-            spans,
-            has_emotes,
+impl ActiveEmote {
+    fn simulate(&mut self, elapsed: f32) {
+        const SPEED: f32 = 50.0;
+        if let Some(position) = self.position {
+            let [x, y] = position;
+            self.position = Some([x, y - SPEED * elapsed]);
         }
     }
-    fn render_message(&self, ui: &Ui) {
-        let bg_rel_luminance =
-            calculate_relative_luminance(ui.style_color(nexus::imgui::StyleColor::WindowBg));
-        let color = acc_name_to_color(&self.chat.account_name, bg_rel_luminance);
-        let name = format!("{}:", self.chat.character_name);
-        let name_size = ui.calc_text_size(&name);
-        let font_size = ui.current_font_size();
-        let _frame_pad_style = if self.has_emotes {
-            let style = ui.push_style_var(StyleVar::FramePadding([
-                0.0,
-                0.5 * (MAX_EMOTE_HEIGHT - font_size),
-            ]));
-            ui.align_text_to_frame_padding();
-            Some(style)
-        } else {
-            None
-        };
-        ui.text_colored(color, &name);
-        let window_width = ui.window_content_region_width();
-        let mut width = name_size[0];
-        for span in &self.spans {
-            let next_width = match span {
-                Span::Emote(span) => {
-                    if let Some(tex) =
-                        get_texture_or_create_from_file(&span.emote.id, &span.emote.path)
-                    {
-                        let tex_size = get_emote_size(&tex);
-                        tex_size[0]
-                    } else {
-                        ui.calc_text_size(&span.emote.matcher)[0]
-                    }
-                }
-                Span::Text(text) => ui.calc_text_size(text)[0],
-            } + ui.calc_text_size(" ")[0];
-            if width + next_width < window_width {
-                ui.same_line();
-                ui.text(" ");
-                ui.same_line();
-            } else {
-                width = 0.0;
-                ui.align_text_to_frame_padding();
-            }
-            match span {
-                Span::Emote(span) => {
-                    if let Some(tex) = get_texture(&span.emote.id) {
-                        Image::new(tex.id(), get_emote_size(&tex)).build(ui);
-                    } else {
-                        ui.text(&span.emote.matcher);
-                    }
-                }
-                Span::Text(text) => {
-                    ui.text(text);
-                }
-            }
-            width += next_width;
-        }
+    fn get_position(&self, padding_width: f32) -> [f32; 2] {
+        let position = self.position.unwrap_or([0.0, 0.0]);
+        [
+            position[0] + (self.start.unwrap().elapsed().as_millis() as f32).sin() * padding_width,
+            position[1],
+        ]
     }
 }
 
-#[derive(Debug, Clone)]
-struct Emote {
-    id: String,
-    matcher: String,
-    path: PathBuf,
-}
-
-impl Emote {
-    fn load(path: PathBuf) -> Self {
-        let id = path
-            .file_stem()
-            .expect("Emote file to have a stem")
-            .to_string_lossy()
-            .to_string();
-        Self {
-            id: format!("MEME_{}", id),
-            matcher: id,
-            path,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct EmoteSpan {
-    emote: &'static Emote,
-}
-
-static MESSAGES: Mutex<Vec<ProcessedMessage>> = const { Mutex::new(Vec::new()) };
-static EMOTES: OnceLock<&'static [Emote]> = OnceLock::new();
-
-fn load_emotes(path: &impl AsRef<Path>) -> std::io::Result<Vec<Emote>> {
-    let path = path.as_ref();
-    if path.is_file() {
-        panic!("Emotes must be a directory");
-    }
-    if !path.exists() {
-        std::fs::create_dir_all(path)?;
-    }
-    let mut emotes = Vec::new();
-    for entry in std::fs::read_dir(path)? {
-        let path = entry?.path();
-        let extension = path.extension();
-        // Only jpeg, png and gifs for now. stb_image does not support avif and webp
-        if !["jpg", "jpeg", "png", "gif"]
-            .iter()
-            .any(|ext| extension.map_or(false, |e| e.to_ascii_lowercase() == *ext))
-        {
-            continue;
-        }
-
-        emotes.push(Emote::load(path));
-    }
-
-    Ok(emotes)
-}
+static ACTIVE_EMOTES: Mutex<Vec<ActiveEmote>> = const { Mutex::new(Vec::new()) };
+static EMOTE_SETS: Mutex<Vec<EmoteSet>> = const { Mutex::new(Vec::new()) };
+static WORKER: OnceLock<Mutex<Option<RunningWorker>>> = const { OnceLock::new() };
+static LOADED_EMOTES: Mutex<Vec<String>> = const { Mutex::new(Vec::new()) };
 
 fn load() {
     log::info!("Loading Meme Message");
-    let mut emotes = load_emotes(&emote_path()).expect("Failed to load emotes");
-    emotes.shrink_to_fit();
-    log::info!("Loaded ({}){:?}", emotes.len(), emotes);
-    EMOTES
-        .set(emotes.leak())
-        .expect("EMOTES OnceLock to not already be initialized");
+    let mut settings = Settings::get();
+    if let Err(e) = settings.load(&setting_path()) {
+        log::error!("Failed to load settings: {}", e);
+    }
+    let lock = WORKER
+        .get_or_init(|| Mutex::new(Some(Worker::new().run())))
+        .lock()
+        .unwrap();
+    let worker = lock.as_ref().expect("Option to be set");
+    let settings = settings.clone();
+    worker.spawn(Box::new(move || {
+        let emote_sets = download_emote_sets(&settings.emote_set_ids, settings.use_global);
+        *EMOTE_SETS.lock().unwrap() = emote_sets;
+    }));
     register_render(RenderType::Render, render!(render_fn)).revert_on_unload();
-    // register_render(RenderType::OptionsRender, render!(render_options)).revert_on_unload();
+    register_render(RenderType::OptionsRender, render!(render_options)).revert_on_unload();
     // TODO: this event is not triggered, if you are already in a squad when logging in
     CHAT_MESSAGE
         .subscribe(event_consume!(|payload: Option<&RawChatMessageInfo>| {
@@ -227,35 +86,147 @@ fn load() {
         .revert_on_unload();
 }
 
-fn render_fn(ui: &Ui) {
-    Window::new("Squadchat").build(ui, || {
-        let msgs = MESSAGES.lock().unwrap();
-        for message in msgs.iter() {
-            let _style = ui.push_style_var(StyleVar::ItemSpacing([0.0, 0.0]));
-            message.render_message(ui);
+fn render_options(ui: &Ui) {
+    let mut settings = Settings::get();
+    if let Some(diff) = settings.ui_and_save(ui) {
+        settings.save(&setting_path()).unwrap();
+        for d in diff {
+            match d {
+                Diff::Added(id) => {
+                    // Do we care about the case where we change settings during download?
+                    let lock = WORKER.wait().lock().unwrap();
+                    let worker = lock.as_ref().expect("Option to be set");
+                    worker.spawn(Box::new(move || {
+                        let Ok(emote_set) = get_emotes(&id) else {
+                            log::error!("Failed to download emote set: {}", id);
+                            return;
+                        };
+                        EMOTE_SETS.lock().unwrap().push(emote_set);
+                    }));
+                }
+                Diff::Removed(id) => {
+                    let mut emote_sets = EMOTE_SETS.lock().unwrap();
+                    emote_sets.retain(|e| e.id != id);
+                }
+            }
         }
-        let scroll = ui.scroll_y() == ui.scroll_max_y();
-        if scroll {
-            ui.set_scroll_here_y();
-        }
-    });
+    }
 }
 
-// TODO: probably wont be a OnceLock meme
-// so we can reload emotes at runtime
-// then we can also remove the unsafe, but we need to lock or pass the emotes around
-fn unload() {
-    // unleak the emotes
-    let emotes = EMOTES.wait();
-    unsafe {
-        let _ = Vec::from_raw_parts(emotes.as_ptr() as *mut Emote, emotes.len(), emotes.len());
+fn random_offset(range: RangeInclusive<f32>) -> f32 {
+    rand::random_range(range)
+}
+
+fn render_fn(ui: &Ui) {
+    thread_local! {
+        static LAST_TS: Cell<Instant> = Cell::new(Instant::now());
     }
+    let elapsed = LAST_TS.get().elapsed().as_millis() as f32;
+    const PADDING: f32 = 0.10;
+    let mut active_emotes = ACTIVE_EMOTES.lock().unwrap();
+    let ndata = read_nexus_link().expect("Nexuslink to exist");
+    let mut to_remove = Vec::new();
+    for (i, active_emote) in active_emotes.iter_mut().enumerate() {
+        if let Some(texture) = get_texture(&active_emote.identifier) {
+            if active_emote.position.is_none() {
+                let factual_width = ndata.width - texture.width / 2;
+                let left_offset = factual_width as f32 * PADDING;
+                let right_offset = factual_width as f32 * (1.0 - PADDING);
+                active_emote.position = Some([
+                    random_offset(left_offset..=right_offset),
+                    ndata.height as f32,
+                ]);
+            }
+            if active_emote.start.is_none() {
+                active_emote.start = Some(Instant::now());
+            }
+            active_emote.simulate(elapsed);
+            let pos = active_emote.get_position(ndata.width as f32 * PADDING / 2.0);
+            if (pos[1] + texture.height as f32) < 0.0 {
+                to_remove.push(i);
+            } else {
+                if let Some(_w) = Window::new(format!("EMOTE#{i}"))
+                    .no_decoration()
+                    .always_auto_resize(true)
+                    .draw_background(false)
+                    .movable(false)
+                    .no_inputs()
+                    .focus_on_appearing(false)
+                    .position(pos, Condition::Always)
+                    .begin(ui)
+                {
+                    Image::new(texture.id(), texture.size()).build(ui);
+                }
+            }
+        }
+    }
+    for i in to_remove.into_iter().rev() {
+        log::info!("Removing emote #{i}");
+        drop(active_emotes.swap_remove(i));
+    }
+    LAST_TS.set(Instant::now());
+}
+
+fn unload() {
+    WORKER
+        .wait()
+        .replace(None)
+        .unwrap()
+        .expect("Option to be set")
+        .join();
+    drop(ACTIVE_EMOTES.replace(Vec::new()));
+    drop(EMOTE_SETS.replace(Vec::new()));
 }
 
 fn chat_message(message: ChatMessageInfo<'_>) {
     let message = message.to_owned();
-    let mut msgs = MESSAGES.lock().unwrap();
-    msgs.push(ProcessedMessage::new(message, EMOTES.wait()));
+    process_message(message);
+}
+
+fn find_file(files: &[File]) -> Option<&File> {
+    files.iter().find(|&f| {
+        [FileFormat::Gif, FileFormat::Png].contains(&f.format) && f.static_name.starts_with("3x")
+    })
+}
+
+fn process_message(chat: ChatMessageInfoOwned) {
+    let emote_sets = EMOTE_SETS.lock().unwrap();
+    let mut loaded = LOADED_EMOTES.lock().unwrap();
+    for word in chat.text.split_whitespace() {
+        for emote in emote_sets.iter().flat_map(|e| e.emotes.iter()) {
+            if emote.name == word {
+                let identifier = format!("EMOTE_{word}");
+                ACTIVE_EMOTES.lock().unwrap().push(ActiveEmote {
+                    identifier: identifier.clone(),
+                    position: None,
+                    start: None,
+                });
+                if loaded.contains(&identifier) {
+                    continue;
+                }
+                if let Some(file) = find_file(&emote.data.host.files) {
+                    let Ok(url) = url::Url::parse(&format!("https:{}/", emote.data.host.url))
+                    else {
+                        log::error!("Failed to parse url: {}", emote.data.host.url);
+                        continue;
+                    };
+                    let Ok(url) = url.join(&file.static_name) else {
+                        log::error!("Failed to join url: {}", file.static_name);
+                        continue;
+                    };
+                    // just trigger load
+                    // there should be a load_texture_from_url function
+                    // but apparently the bindings don't expose it yet
+                    let _ = get_texture_or_create_from_url(
+                        &identifier,
+                        url.origin().ascii_serialization(),
+                        url.path(),
+                    );
+                    loaded.push(identifier);
+                }
+            }
+        }
+    }
 }
 
 nexus::export! {
