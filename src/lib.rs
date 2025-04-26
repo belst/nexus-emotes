@@ -39,9 +39,12 @@ struct ActiveEmote {
 const SPEED: f32 = 0.5;
 impl ActiveEmote {
     fn simulate(&mut self, elapsed: f32) {
+        let speed = SPEED
+            + (self.start_offset + self.start.unwrap().elapsed().as_millis() as f32 / 1000.0).sin()
+                * 0.1;
         if let Some(position) = self.position {
             let [x, y] = position;
-            self.position = Some([x, y - SPEED * elapsed]);
+            self.position = Some([x, y - speed * elapsed]);
         }
     }
     fn get_position(&self, padding_width: f32) -> [f32; 2] {
@@ -91,7 +94,8 @@ fn load() {
 
 fn render_options(ui: &Ui) {
     let mut settings = Settings::get();
-    if let Some(diff) = settings.ui_and_save(ui) {
+    let mut emote_sets = EMOTE_SETS.lock().unwrap();
+    if let Some(diff) = settings.ui_and_save(emote_sets.as_slice(), ui) {
         settings.save(&setting_path()).unwrap();
         for d in diff {
             match d {
@@ -104,11 +108,11 @@ fn render_options(ui: &Ui) {
                             log::error!("Failed to download emote set: {}", id);
                             return;
                         };
-                        EMOTE_SETS.lock().unwrap().push(emote_set);
+                        let mut emote_sets = EMOTE_SETS.lock().unwrap();
+                        emote_sets.push(emote_set);
                     }));
                 }
                 Diff::Removed(id) => {
-                    let mut emote_sets = EMOTE_SETS.lock().unwrap();
                     emote_sets.retain(|e| e.id != id);
                 }
             }

@@ -1,6 +1,6 @@
 [package]
 name = "nexus_emotes"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["belst"]
 description = "New Squad Message Viewer with emote support"
@@ -12,7 +12,6 @@ name = "nexus_emotes"
 [dependencies]
 anyhow = "1.0.98"
 log = "0.4.27"
-open = "5.3.2"
 rand = "0.9.1"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"

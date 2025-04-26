@@ -1,3 +1,4 @@
+use crate::seventv::EmoteSet;
 use crate::util::e;
 use anyhow::Result;
 use nexus::imgui::Ui;
@@ -55,7 +56,11 @@ impl Settings {
 
     // TODO: display emote set names if available
     // Maybe cache emote sets
-    pub fn ui_and_save(&mut self, ui: &Ui) -> Option<HashSet<Diff<String>>> {
+    pub fn ui_and_save(
+        &mut self,
+        emote_sets: &[EmoteSet],
+        ui: &Ui,
+    ) -> Option<HashSet<Diff<String>>> {
         thread_local! {
             static DIFF: RefCell<HashSet<Diff<String>>> = RefCell::new(HashSet::new());
         }
@@ -72,12 +77,18 @@ impl Settings {
                 }
             });
         }
-        let _t = ui.begin_table("emote sets", 2);
+        let t = ui.begin_table("emote sets", 3);
         let mut to_remove = Vec::new();
         for (i, id) in self.emote_set_ids.iter().enumerate() {
             ui.table_next_row();
             ui.table_next_column();
-            ui.text(format!("{}", id));
+            if let Some(es) = emote_sets.iter().find(|es| &es.id == id) {
+                ui.text(&es.name);
+            } else {
+                ui.text("TBD");
+            }
+            ui.table_next_column();
+            ui.text(id);
             ui.table_next_column();
             if ui.button(e("Remove") + &format!("##emotesetremove{i}")) {
                 to_remove.push(i);
@@ -107,6 +118,7 @@ impl Settings {
                 id.clear();
             }
         });
+        drop(t);
         if ui.button(e("Save")) {
             Some(DIFF.take())
         } else {
