@@ -1,5 +1,5 @@
 use crate::seventv::EmoteSet;
-use crate::util::e;
+use crate::util::{UiExt, e};
 use anyhow::Result;
 use nexus::imgui::Ui;
 use serde::{Deserialize, Serialize};
@@ -54,8 +54,6 @@ impl Settings {
         Ok(())
     }
 
-    // TODO: display emote set names if available
-    // Maybe cache emote sets
     pub fn ui_and_save(
         &mut self,
         emote_sets: &[EmoteSet],
@@ -66,6 +64,15 @@ impl Settings {
         }
         let old_use_global = self.use_global;
         ui.checkbox(e("Use global 7tv Emote Set"), &mut self.use_global);
+        if ui.help_marker(|| {
+            ui.tooltip_text(e("Enable 7tv global emote set. Click to open in browser"));
+        }) {
+            if let Err(e) =
+                open::that_detached("https://7tv.app/emote-sets/01HKQT8EWR000ESSWF3625XCS4")
+            {
+                log::error!("Failed to open browser: {e}");
+            }
+        }
         if old_use_global != self.use_global {
             DIFF.with_borrow_mut(|d| {
                 if self.use_global {
@@ -77,18 +84,16 @@ impl Settings {
                 }
             });
         }
-        let t = ui.begin_table("emote sets", 3);
+        let t = ui.begin_table("emote sets", 2);
         let mut to_remove = Vec::new();
         for (i, id) in self.emote_set_ids.iter().enumerate() {
             ui.table_next_row();
             ui.table_next_column();
             if let Some(es) = emote_sets.iter().find(|es| &es.id == id) {
-                ui.text(&es.name);
+                ui.link(&es.name, format!("https://7tv.app/emote-sets/{id}"));
             } else {
-                ui.text("TBD");
+                ui.link(id, format!("https://7tv.app/emote-sets/{id}"));
             }
-            ui.table_next_column();
-            ui.text(id);
             ui.table_next_column();
             if ui.button(e("Remove") + &format!("##emotesetremove{i}")) {
                 to_remove.push(i);
@@ -108,6 +113,11 @@ impl Settings {
         }
         ID.with_borrow_mut(|mut id| {
             ui.input_text(e("ID") + "##emotesetinput", &mut id).build();
+            ui.help_marker(|| {
+                ui.tooltip_text(e(
+                    "User ID or Emote Set ID (on 7tv in the url after /emote-sets/)",
+                ));
+            });
             ui.table_next_column();
             if ui.button(e("Add") + "##dpsreportfilterid") {
                 self.emote_set_ids.push(id.clone());
