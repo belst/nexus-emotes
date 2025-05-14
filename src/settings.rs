@@ -50,6 +50,9 @@ impl Settings {
 
     pub fn save(&self, path: &impl AsRef<std::path::Path>) -> Result<()> {
         let path = path.as_ref();
+        if !path.exists() {
+            std::fs::create_dir_all(path.parent().unwrap())?;
+        }
         std::fs::write(path, serde_json::to_string_pretty(self)?)?;
         Ok(())
     }
