@@ -1,13 +1,14 @@
 #![feature(lock_value_accessors)]
 
 use background::{RunningWorker, Worker};
+use giftex::{Gif, GifState};
 use nexus::arcdps::extras::message::{ChatMessageInfo, ChatMessageInfoOwned, RawChatMessageInfo};
 use nexus::data_link::read_nexus_link;
-use nexus::event_consume;
 use nexus::gui::{RenderType, register_render, render};
-use nexus::imgui::{Condition, Image, Ui, Window};
+use nexus::imgui::{Condition, Image, TextureId, Ui, Window};
 use nexus::paths::get_addon_dir;
-use nexus::texture::{get_texture, get_texture_or_create_from_url};
+use nexus::texture::{Texture, get_texture, get_texture_or_create_from_url};
+use nexus::{AddonApi, event_consume};
 use nexus::{AddonFlags, UpdateProvider, event::extras::CHAT_MESSAGE};
 use settings::{Diff, Settings};
 use seventv::{EmoteSet, File, FileFormat, download_emote_sets, get_emotes};
@@ -18,6 +19,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 mod background;
+mod giftex;
 mod settings;
 mod seventv;
 mod util;
@@ -31,6 +33,7 @@ fn setting_path() -> PathBuf {
 #[derive(Debug, Clone)]
 struct ActiveEmote {
     identifier: String,
+    gif: Option<GifState>,
     position: Option<[f32; 2]>,
     start: Option<Instant>,
     start_offset: f32,
@@ -62,7 +65,7 @@ impl ActiveEmote {
 static ACTIVE_EMOTES: Mutex<Vec<ActiveEmote>> = const { Mutex::new(Vec::new()) };
 static EMOTE_SETS: Mutex<Vec<EmoteSet>> = const { Mutex::new(Vec::new()) };
 static WORKER: OnceLock<Mutex<Option<RunningWorker>>> = const { OnceLock::new() };
-static LOADED_EMOTES: Mutex<Vec<String>> = const { Mutex::new(Vec::new()) };
+static LOADED_EMOTES: Mutex<Vec<(String, Option<Gif>)>> = const { Mutex::new(Vec::new()) };
 
 fn load() {
     log::info!("Loading Meme Message");
@@ -124,6 +127,58 @@ fn random_offset(range: RangeInclusive<f32>) -> f32 {
     rand::random_range(range)
 }
 
+enum EmoteType {
+    Static(Texture),
+    Gif(GifState),
+}
+
+impl EmoteType {
+    fn from_texture(texture: Texture) -> Self {
+        Self::Static(texture)
+    }
+
+    fn from_gif(gif: GifState) -> Self {
+        Self::Gif(gif)
+    }
+
+    fn width(&self) -> f32 {
+        match self {
+            EmoteType::Static(t) => t.width as f32,
+            EmoteType::Gif(g) => g.frames.width,
+        }
+    }
+
+    fn height(&self) -> f32 {
+        match self {
+            EmoteType::Static(t) => t.height as f32,
+            EmoteType::Gif(g) => g.frames.height,
+        }
+    }
+
+    fn size(&self) -> [f32; 2] {
+        [self.width(), self.height()]
+    }
+
+    // fn id(&self) -> TextureId {
+    //     match self {
+    //         EmoteType::Static(t) => t.id(),
+    //         EmoteType::Gif(g) => g.frames.frames[g.current_frame].get_id(),
+    //     }
+    // }
+}
+
+fn check_gif(active_emote: &mut ActiveEmote) {
+    if let Some(gif) = LOADED_EMOTES.lock().unwrap().iter_mut().find_map(|(l, r)| {
+        if l == &active_emote.identifier {
+            r.as_ref()
+        } else {
+            None
+        }
+    }) {
+        active_emote.gif = Some(GifState::new(gif.clone()));
+    }
+}
+
 fn render_fn(ui: &Ui) {
     thread_local! {
         static LAST_TS: Cell<Instant> = Cell::new(Instant::now());
@@ -134,35 +189,50 @@ fn render_fn(ui: &Ui) {
     let ndata = read_nexus_link().expect("Nexuslink to exist");
     let mut to_remove = Vec::new();
     for (i, active_emote) in active_emotes.iter_mut().enumerate() {
-        if let Some(texture) = get_texture(&active_emote.identifier) {
-            if active_emote.position.is_none() {
-                let factual_width = ndata.width - texture.width / 2;
-                let left_offset = factual_width as f32 * PADDING;
-                let right_offset = factual_width as f32 * (1.0 - PADDING);
-                active_emote.position = Some([
-                    random_offset(left_offset..=right_offset),
-                    ndata.height as f32,
-                ]);
-            }
-            if active_emote.start.is_none() {
-                active_emote.start = Some(Instant::now());
-            }
-            active_emote.simulate(elapsed);
-            let pos = active_emote.get_position(ndata.width as f32 * PADDING / 2.0);
-            if (pos[1] + texture.height as f32) < 0.0 {
-                to_remove.push(i);
-            } else {
-                if let Some(_w) = Window::new(format!("EMOTE#{i}"))
-                    .no_decoration()
-                    .always_auto_resize(true)
-                    .draw_background(false)
-                    .movable(false)
-                    .no_inputs()
-                    .focus_on_appearing(false)
-                    .position(pos, Condition::Always)
-                    .begin(ui)
-                {
-                    Image::new(texture.id(), texture.size()).build(ui);
+        let texture = get_texture(&active_emote.identifier);
+        if active_emote.gif.is_none() && texture.is_none() {
+            check_gif(active_emote);
+            continue;
+        }
+        let texture = texture
+            .map(EmoteType::from_texture)
+            .or_else(|| active_emote.gif.take().map(EmoteType::from_gif))
+            .expect("Texture or gif should exist here");
+        if active_emote.position.is_none() {
+            let factual_width = ndata.width as f32 - texture.width() / 2.0;
+            let left_offset = factual_width * PADDING;
+            let right_offset = factual_width * (1.0 - PADDING);
+            active_emote.position = Some([
+                random_offset(left_offset..=right_offset),
+                ndata.height as f32,
+            ]);
+        }
+        if active_emote.start.is_none() {
+            active_emote.start = Some(Instant::now());
+        }
+        active_emote.simulate(elapsed);
+        let pos = active_emote.get_position(ndata.width as f32 * PADDING / 2.0);
+        if (pos[1] + texture.height()) < 0.0 {
+            to_remove.push(i);
+        } else {
+            if let Some(_w) = Window::new(format!("EMOTE#{i}"))
+                .no_decoration()
+                .always_auto_resize(true)
+                .draw_background(false)
+                .movable(false)
+                .no_inputs()
+                .focus_on_appearing(false)
+                .position(pos, Condition::Always)
+                .begin(ui)
+            {
+                match texture {
+                    EmoteType::Static(texture) => {
+                        Image::new(texture.id(), texture.size()).build(ui);
+                    }
+                    EmoteType::Gif(mut gif) => {
+                        gif.advance(ui);
+                        active_emote.gif = Some(gif);
+                    }
                 }
             }
         }
@@ -206,11 +276,12 @@ fn process_message(chat: ChatMessageInfoOwned) {
                 let identifier = format!("EMOTE_{word}");
                 ACTIVE_EMOTES.lock().unwrap().push(ActiveEmote {
                     identifier: identifier.clone(),
+                    gif: None,
                     position: None,
                     start: None,
                     start_offset: rand::random(),
                 });
-                if loaded.contains(&identifier) {
+                if loaded.iter().any(|(l, _)| l == &identifier) {
                     continue;
                 }
                 log::info!("Loading emote {}", word);
@@ -227,12 +298,39 @@ fn process_message(chat: ChatMessageInfoOwned) {
                     // just trigger load
                     // there should be a load_texture_from_url function
                     // but apparently the bindings don't expose it yet
-                    let _ = get_texture_or_create_from_url(
-                        &identifier,
-                        url.origin().ascii_serialization(),
-                        url.path(),
-                    );
-                    loaded.push(identifier);
+                    loaded.push((identifier.clone(), None));
+                    if emote.data.animated {
+                        let lock = WORKER.wait().lock().unwrap();
+                        let worker = lock.as_ref().expect("Option to be set");
+                        worker.spawn(Box::new(move || {
+                            let Some(device) = AddonApi::get().get_d3d11_device() else {
+                                log::error!("Failed to get d3d11 device");
+                                return;
+                            };
+                            let gif = match Gif::from_url(&device, identifier.clone(), url.as_str())
+                            {
+                                Ok(gif) => gif,
+                                Err(e) => {
+                                    log::error!("Failed to load gif: {}", e);
+                                    return;
+                                }
+                            };
+                            if let Some(e) = LOADED_EMOTES
+                                .lock()
+                                .unwrap()
+                                .iter_mut()
+                                .find(|(l, _)| l == &identifier)
+                            {
+                                e.1 = Some(gif);
+                            }
+                        }));
+                    } else {
+                        let _ = get_texture_or_create_from_url(
+                            &identifier,
+                            url.origin().ascii_serialization(),
+                            url.path(),
+                        );
+                    }
                 }
             }
         }

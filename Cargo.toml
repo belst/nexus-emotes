@@ -11,6 +11,8 @@ name = "nexus_emotes"
 
 [dependencies]
 anyhow = "1.0.98"
+gif = "0.13.1"
+gif-dispose = "5.0.1"
 log = "0.4.27"
 open = "5.3.2"
 rand = "0.9.1"
@@ -22,3 +24,13 @@ url = "2.5.4"
 [dependencies.nexus]
 git = "https://github.com/belst/nexus-rs"
 features = ["log", "extras", "log_filter"]
+
+[dependencies.windows]
+version = "0.60.0"
+features = [
+    "System",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct3D",
+]
