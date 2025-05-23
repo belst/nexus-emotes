@@ -29,8 +29,11 @@ impl Worker {
             .name("Background Worker".to_string())
             .spawn(move || {
                 while let Ok(job) = rx.recv() {
+                    log::trace!("Received job");
                     job();
+                    log::trace!("Finished job");
                 }
+                log::trace!("Worker thread exiting");
             })
             .unwrap();
         self.thread = Some(thread);

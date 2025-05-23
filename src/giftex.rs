@@ -4,7 +4,9 @@ use nexus::imgui::TextureId;
 use nexus::imgui::Ui;
 use std::ffi::c_void;
 use std::ptr::NonNull;
+use std::sync::Mutex;
 use std::{io::Read, time::Instant};
+use ureq::BodyReader;
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -31,14 +33,33 @@ pub struct Gif {
     pub width: f32,
 }
 
+pub static TEXTURE_QUEUE: Mutex<Vec<(String, BodyReader<'static>)>> =
+    const { Mutex::new(Vec::new()) };
+
+pub fn process_queue(device: &ID3D11Device) -> anyhow::Result<Vec<(String, Gif)>> {
+    TEXTURE_QUEUE
+        .lock()
+        .unwrap()
+        .drain(..)
+        .map(|(identifier, reader)| {
+            let gif = load_gif(device, reader)?;
+            Ok((identifier, gif))
+        })
+        .collect()
+}
+
 impl Gif {
     pub fn size(&self) -> [f32; 2] {
         [self.width, self.height]
     }
 
-    pub fn from_url(device: &ID3D11Device, url: &str) -> anyhow::Result<Self> {
+    pub fn load(identifier: String, url: &str) -> anyhow::Result<()> {
         let response = ureq::get(url).call()?;
-        load_gif(device, response.into_body().into_reader())
+        TEXTURE_QUEUE
+            .lock()
+            .unwrap()
+            .push((identifier, response.into_body().into_reader()));
+        Ok(())
     }
 }
 

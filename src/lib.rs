@@ -17,6 +17,7 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
+use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 
 mod background;
 mod giftex;
@@ -168,7 +169,25 @@ fn check_gif(active_emote: &mut ActiveEmote) {
     }
 }
 
+fn update_gifs(device: &ID3D11Device) {
+    let mut loaded = LOADED_EMOTES.lock().unwrap();
+    let gifs = match giftex::process_queue(device) {
+        Ok(gifs) => gifs,
+        Err(e) => {
+            log::error!("Failed to process gif queue: {e}");
+            return;
+        }
+    };
+    for (identifier, gif) in gifs {
+        if let Some(e) = loaded.iter_mut().find(|(l, _)| l == &identifier) {
+            e.1 = Some(gif);
+        }
+    }
+}
+
 fn render_fn(ui: &Ui) {
+    let device = AddonApi::get().get_d3d11_device().expect("Device to exist");
+    update_gifs(&device);
     thread_local! {
         static LAST_TS: Cell<Instant> = Cell::new(Instant::now());
     }
@@ -290,25 +309,10 @@ fn process_message(chat: ChatMessageInfoOwned) {
                         let lock = WORKER.wait().lock().unwrap();
                         let worker = lock.as_ref().expect("Option to be set");
                         worker.spawn(Box::new(move || {
-                            let Some(device) = AddonApi::get().get_d3d11_device() else {
-                                log::error!("Failed to get d3d11 device");
+                            if let Err(e) = Gif::load(identifier.clone(), url.as_str()) {
+                                log::error!("Failed to load gif: {e}");
                                 return;
                             };
-                            let gif = match Gif::from_url(&device, url.as_str()) {
-                                Ok(gif) => gif,
-                                Err(e) => {
-                                    log::error!("Failed to load gif: {e}");
-                                    return;
-                                }
-                            };
-                            if let Some(e) = LOADED_EMOTES
-                                .lock()
-                                .unwrap()
-                                .iter_mut()
-                                .find(|(l, _)| l == &identifier)
-                            {
-                                e.1 = Some(gif);
-                            }
                         }));
                     } else {
                         let _ = get_texture_or_create_from_url(
