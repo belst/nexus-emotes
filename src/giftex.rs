@@ -1,3 +1,4 @@
+use gif_dispose::RGBA8;
 use nexus::imgui::Image;
 use nexus::imgui::TextureId;
 use nexus::imgui::Ui;
@@ -11,8 +12,6 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 
 #[derive(Debug, Clone)]
 pub struct GifFrame {
-    pub width: f32,
-    pub height: f32,
     pub id: ID3D11ShaderResourceView,
     pub delay: f32,
 }
@@ -27,28 +26,19 @@ impl GifFrame {
 
 #[derive(Debug, Clone)]
 pub struct Gif {
-    pub identifier: String,
     pub frames: Vec<GifFrame>,
     pub height: f32,
     pub width: f32,
 }
 
 impl Gif {
-    pub fn width(&self) -> f32 {
-        self.width
-    }
-
-    pub fn height(&self) -> f32 {
-        self.height
-    }
-
     pub fn size(&self) -> [f32; 2] {
         [self.width, self.height]
     }
 
-    pub fn from_url(device: &ID3D11Device, identifier: String, url: &str) -> anyhow::Result<Self> {
+    pub fn from_url(device: &ID3D11Device, url: &str) -> anyhow::Result<Self> {
         let response = ureq::get(url).call()?;
-        load_gif(device, identifier, response.into_body().into_reader())
+        load_gif(device, response.into_body().into_reader())
     }
 }
 
@@ -83,17 +73,9 @@ impl GifState {
         )
         .build(ui);
     }
-    pub fn reset(&mut self) {
-        self.current_frame = 0;
-        self.timestamp = None;
-    }
 }
 
-pub fn load_gif(
-    device: &ID3D11Device,
-    identifier: String,
-    bytes: impl Read,
-) -> anyhow::Result<Gif> {
+pub fn load_gif(device: &ID3D11Device, bytes: impl Read) -> anyhow::Result<Gif> {
     let mut gif_opts = gif::DecodeOptions::new();
     // Important:
     gif_opts.set_color_output(gif::ColorOutput::Indexed);
@@ -109,20 +91,17 @@ pub fn load_gif(
             let data = screen.pixels_rgba().to_contiguous_buf();
             let srv = create_shader_resource_view(
                 device,
-                unsafe { std::mem::transmute(data.0.as_ref()) },
+                unsafe { std::mem::transmute::<&[RGBA8], &[u8]>(data.0.as_ref()) },
                 screen.width() as u32,
                 screen.height() as u32,
             )?;
             Ok(GifFrame {
-                width: screen.width() as f32,
-                height: screen.height() as f32,
                 id: srv,
                 delay: 10.0 * frame.delay as f32,
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     Ok(Gif {
-        identifier,
         frames,
         width: screen.width() as f32,
         height: screen.height() as f32,

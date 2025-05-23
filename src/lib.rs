@@ -154,17 +154,6 @@ impl EmoteType {
             EmoteType::Gif(g) => g.frames.height,
         }
     }
-
-    fn size(&self) -> [f32; 2] {
-        [self.width(), self.height()]
-    }
-
-    // fn id(&self) -> TextureId {
-    //     match self {
-    //         EmoteType::Static(t) => t.id(),
-    //         EmoteType::Gif(g) => g.frames.frames[g.current_frame].get_id(),
-    //     }
-    // }
 }
 
 fn check_gif(active_emote: &mut ActiveEmote) {
@@ -305,8 +294,7 @@ fn process_message(chat: ChatMessageInfoOwned) {
                                 log::error!("Failed to get d3d11 device");
                                 return;
                             };
-                            let gif = match Gif::from_url(&device, identifier.clone(), url.as_str())
-                            {
+                            let gif = match Gif::from_url(&device, url.as_str()) {
                                 Ok(gif) => gif,
                                 Err(e) => {
                                     log::error!("Failed to load gif: {e}");
