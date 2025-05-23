@@ -4,8 +4,6 @@ use nexus::imgui::Ui;
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::{io::Read, time::Instant};
-use ureq::http::Uri;
-use url::Url;
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -157,7 +155,7 @@ pub fn create_shader_resource_view(
     // Create the texture
     let texture_data = D3D11_SUBRESOURCE_DATA {
         pSysMem: data.as_ptr() as *const _,
-        SysMemPitch: (width * 4) as u32, // 4 bytes per pixel for RGBA
+        SysMemPitch: (width * 4), // 4 bytes per pixel for RGBA
         SysMemSlicePitch: 0,
     };
 
@@ -165,7 +163,7 @@ pub fn create_shader_resource_view(
     unsafe {
         device.CreateTexture2D(&texture_desc, Some(&texture_data), Some(&mut texture))?;
     }
-    let texture = texture.ok_or_else(|| windows::core::Error::from_win32())?;
+    let texture = texture.ok_or_else(windows::core::Error::from_win32)?;
 
     // Create the shader resource view
     let mut srv: Option<ID3D11ShaderResourceView> = None;
@@ -184,5 +182,5 @@ pub fn create_shader_resource_view(
         device.CreateShaderResourceView(&texture, Some(&srv_desc), Some(&mut srv))?;
     }
 
-    Ok(srv.ok_or_else(|| windows::core::Error::from_win32())?)
+    Ok(srv.ok_or_else(windows::core::Error::from_win32)?)
 }

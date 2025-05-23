@@ -114,8 +114,8 @@ impl Settings {
         thread_local! {
             static ID: RefCell<String> = const { RefCell::new(String::new()) };
         }
-        ID.with_borrow_mut(|mut id| {
-            ui.input_text(e("ID") + "##emotesetinput", &mut id).build();
+        ID.with_borrow_mut(|id| {
+            ui.input_text(e("ID") + "##emotesetinput", id).build();
             ui.help_marker(|| {
                 ui.tooltip_text(e(
                     "User ID or Emote Set ID (on 7tv in the url after /emote-sets/)",

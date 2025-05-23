@@ -84,8 +84,8 @@ pub struct EmoteSet {
 }
 
 pub fn get_emotes(emote_id: &str) -> Result<EmoteSet> {
-    log::info!("Downloading emote set {}", emote_id);
-    let url = format!("https://7tv.io/v3/emote-sets/{}", emote_id);
+    log::info!("Downloading emote set {emote_id}");
+    let url = format!("https://7tv.io/v3/emote-sets/{emote_id}");
 
     let emote_set = ureq::get(&url).call()?.body_mut().read_json()?;
     // who even needs more error handling setps
@@ -102,7 +102,7 @@ pub fn download_emote_sets(emote_set_ids: &[String], use_global: bool) -> Vec<Em
     for e in err {
         // noop
         if let Err(e) = e {
-            log::error!("Failed to download emote set: {}", e);
+            log::error!("Failed to download emote set: {e}");
         }
     }
     ok.into_iter().map(Result::unwrap).collect()

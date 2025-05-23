@@ -5,7 +5,7 @@ use giftex::{Gif, GifState};
 use nexus::arcdps::extras::message::{ChatMessageInfo, ChatMessageInfoOwned, RawChatMessageInfo};
 use nexus::data_link::read_nexus_link;
 use nexus::gui::{RenderType, register_render, render};
-use nexus::imgui::{Condition, Image, TextureId, Ui, Window};
+use nexus::imgui::{Condition, Image, Ui, Window};
 use nexus::paths::get_addon_dir;
 use nexus::texture::{Texture, get_texture, get_texture_or_create_from_url};
 use nexus::{AddonApi, event_consume};
@@ -71,7 +71,7 @@ fn load() {
     log::info!("Loading Meme Message");
     let mut settings = Settings::get();
     if let Err(e) = settings.load(&setting_path()) {
-        log::error!("Failed to load settings: {}", e);
+        log::error!("Failed to load settings: {e}");
     }
     let lock = WORKER
         .get_or_init(|| Mutex::new(Some(Worker::new().run())))
@@ -108,7 +108,7 @@ fn render_options(ui: &Ui) {
                     let worker = lock.as_ref().expect("Option to be set");
                     worker.spawn(Box::new(move || {
                         let Ok(emote_set) = get_emotes(&id) else {
-                            log::error!("Failed to download emote set: {}", id);
+                            log::error!("Failed to download emote set: {id}");
                             return;
                         };
                         let mut emote_sets = EMOTE_SETS.lock().unwrap();
@@ -214,25 +214,23 @@ fn render_fn(ui: &Ui) {
         let pos = active_emote.get_position(ndata.width as f32 * PADDING / 2.0);
         if (pos[1] + texture.height()) < 0.0 {
             to_remove.push(i);
-        } else {
-            if let Some(_w) = Window::new(format!("EMOTE#{i}"))
-                .no_decoration()
-                .always_auto_resize(true)
-                .draw_background(false)
-                .movable(false)
-                .no_inputs()
-                .focus_on_appearing(false)
-                .position(pos, Condition::Always)
-                .begin(ui)
-            {
-                match texture {
-                    EmoteType::Static(texture) => {
-                        Image::new(texture.id(), texture.size()).build(ui);
-                    }
-                    EmoteType::Gif(mut gif) => {
-                        gif.advance(ui);
-                        active_emote.gif = Some(gif);
-                    }
+        } else if let Some(_w) = Window::new(format!("EMOTE#{i}"))
+            .no_decoration()
+            .always_auto_resize(true)
+            .draw_background(false)
+            .movable(false)
+            .no_inputs()
+            .focus_on_appearing(false)
+            .position(pos, Condition::Always)
+            .begin(ui)
+        {
+            match texture {
+                EmoteType::Static(texture) => {
+                    Image::new(texture.id(), texture.size()).build(ui);
+                }
+                EmoteType::Gif(mut gif) => {
+                    gif.advance(ui);
+                    active_emote.gif = Some(gif);
                 }
             }
         }
@@ -272,7 +270,7 @@ fn process_message(chat: ChatMessageInfoOwned) {
     for word in chat.text.split_whitespace() {
         for emote in emote_sets.iter().flat_map(|e| e.emotes.iter()) {
             if emote.name == word {
-                log::info!("Found emote {} in chat message", word);
+                log::info!("Found emote {word} in chat message");
                 let identifier = format!("EMOTE_{word}");
                 ACTIVE_EMOTES.lock().unwrap().push(ActiveEmote {
                     identifier: identifier.clone(),
@@ -284,7 +282,7 @@ fn process_message(chat: ChatMessageInfoOwned) {
                 if loaded.iter().any(|(l, _)| l == &identifier) {
                     continue;
                 }
-                log::info!("Loading emote {}", word);
+                log::info!("Loading emote {word}");
                 if let Some(file) = find_file(&emote.data.host.files) {
                     let Ok(url) = url::Url::parse(&format!("https:{}/", emote.data.host.url))
                     else {
@@ -311,7 +309,7 @@ fn process_message(chat: ChatMessageInfoOwned) {
                             {
                                 Ok(gif) => gif,
                                 Err(e) => {
-                                    log::error!("Failed to load gif: {}", e);
+                                    log::error!("Failed to load gif: {e}");
                                     return;
                                 }
                             };
