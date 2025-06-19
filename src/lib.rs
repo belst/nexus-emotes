@@ -211,7 +211,7 @@ fn render_fn(ui: &Ui) {
             let left_offset = factual_width * PADDING;
             let right_offset = factual_width * (1.0 - PADDING);
             active_emote.position = Some([
-                random_offset(left_offset..=right_offset),
+                random_offset(left_offset..=right_offset) - texture.width() / 2.0,
                 ndata.height as f32,
             ]);
         }
