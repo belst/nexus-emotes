@@ -52,10 +52,8 @@ impl Gif {
 
     pub fn load(identifier: String, url: &str) -> anyhow::Result<()> {
         let response = ureq::get(url).call()?;
-        TEXTURE_QUEUE
-            .lock()
-            .unwrap()
-            .push((identifier, load_gif(response.into_body().into_reader())?));
+        let decoded = load_gif(response.into_body().into_reader())?;
+        TEXTURE_QUEUE.lock().unwrap().push((identifier, decoded));
         Ok(())
     }
 }
@@ -100,6 +98,8 @@ pub struct RawGif {
 }
 
 fn upload_gif_to_gpu(device: &ID3D11Device, gif: RawGif) -> anyhow::Result<Gif> {
+    log::trace!("Uploading gif to gpu");
+    let now = Instant::now();
     let frames = gif
         .frames
         .into_iter()
@@ -108,6 +108,7 @@ fn upload_gif_to_gpu(device: &ID3D11Device, gif: RawGif) -> anyhow::Result<Gif> 
             Ok(GifFrame { id: srv, delay })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    log::trace!("Uploading gif to gpu took {}us", now.elapsed().as_micros());
     Ok(Gif {
         frames,
         width: gif.width as f32,
@@ -116,6 +117,8 @@ fn upload_gif_to_gpu(device: &ID3D11Device, gif: RawGif) -> anyhow::Result<Gif> 
 }
 
 pub fn load_gif(bytes: impl Read) -> anyhow::Result<RawGif> {
+    log::trace!("Decoding gif");
+    let now = Instant::now();
     let mut gif_opts = gif::DecodeOptions::new();
     // Important:
     gif_opts.set_color_output(gif::ColorOutput::Indexed);
@@ -135,6 +138,7 @@ pub fn load_gif(bytes: impl Read) -> anyhow::Result<RawGif> {
             ))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    log::trace!("Decoding gif took {}us", now.elapsed().as_micros());
     Ok(RawGif {
         frames,
         width: screen.width() as u32,

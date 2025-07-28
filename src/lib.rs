@@ -335,5 +335,5 @@ nexus::export! {
     unload,
     provider: UpdateProvider::GitHub,
     update_link: "https://github.com/belst/nexus-emotes",
-    log_filter: "warn,nexus_emotes=debug"
+    log_filter: "warn,nexus_emotes=trace"
 }
