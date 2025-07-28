@@ -1,4 +1,3 @@
-use gif_dispose::RGBA8;
 use nexus::imgui::Image;
 use nexus::imgui::TextureId;
 use nexus::imgui::Ui;
@@ -6,7 +5,6 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::Mutex;
 use std::{io::Read, time::Instant};
-use ureq::BodyReader;
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -33,16 +31,15 @@ pub struct Gif {
     pub width: f32,
 }
 
-pub static TEXTURE_QUEUE: Mutex<Vec<(String, BodyReader<'static>)>> =
-    const { Mutex::new(Vec::new()) };
+pub static TEXTURE_QUEUE: Mutex<Vec<(String, RawGif)>> = const { Mutex::new(Vec::new()) };
 
 pub fn process_queue(device: &ID3D11Device) -> anyhow::Result<Vec<(String, Gif)>> {
     TEXTURE_QUEUE
         .lock()
         .unwrap()
         .drain(..)
-        .map(|(identifier, reader)| {
-            let gif = load_gif(device, reader)?;
+        .map(|(identifier, raw_gif)| {
+            let gif = upload_gif_to_gpu(device, raw_gif)?;
             Ok((identifier, gif))
         })
         .collect()
@@ -58,7 +55,7 @@ impl Gif {
         TEXTURE_QUEUE
             .lock()
             .unwrap()
-            .push((identifier, response.into_body().into_reader()));
+            .push((identifier, load_gif(response.into_body().into_reader())?));
         Ok(())
     }
 }
@@ -96,7 +93,29 @@ impl GifState {
     }
 }
 
-pub fn load_gif(device: &ID3D11Device, bytes: impl Read) -> anyhow::Result<Gif> {
+pub struct RawGif {
+    frames: Vec<(Vec<u8>, f32)>,
+    width: u32,
+    height: u32,
+}
+
+fn upload_gif_to_gpu(device: &ID3D11Device, gif: RawGif) -> anyhow::Result<Gif> {
+    let frames = gif
+        .frames
+        .into_iter()
+        .map(|(data, delay)| {
+            let srv = create_shader_resource_view(device, &data, gif.width, gif.height)?;
+            Ok(GifFrame { id: srv, delay })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(Gif {
+        frames,
+        width: gif.width as f32,
+        height: gif.height as f32,
+    })
+}
+
+pub fn load_gif(bytes: impl Read) -> anyhow::Result<RawGif> {
     let mut gif_opts = gif::DecodeOptions::new();
     // Important:
     gif_opts.set_color_output(gif::ColorOutput::Indexed);
@@ -110,22 +129,16 @@ pub fn load_gif(device: &ID3D11Device, bytes: impl Read) -> anyhow::Result<Gif> 
             let frame = frame?;
             screen.blit_frame(&frame)?;
             let data = screen.pixels_rgba().to_contiguous_buf();
-            let srv = create_shader_resource_view(
-                device,
-                unsafe { std::mem::transmute::<&[RGBA8], &[u8]>(data.0.as_ref()) },
-                screen.width() as u32,
-                screen.height() as u32,
-            )?;
-            Ok(GifFrame {
-                id: srv,
-                delay: 10.0 * frame.delay as f32,
-            })
+            Ok((
+                unsafe { std::mem::transmute(data.0.to_vec()) },
+                10.0 * frame.delay as f32,
+            ))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    Ok(Gif {
+    Ok(RawGif {
         frames,
-        width: screen.width() as f32,
-        height: screen.height() as f32,
+        width: screen.width() as u32,
+        height: screen.height() as u32,
     })
 }
 
