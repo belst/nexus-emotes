@@ -38,6 +38,7 @@ struct ActiveEmote {
     position: Option<[f32; 2]>,
     start: Option<Instant>,
     start_offset: f32,
+    overlay_to: Option<usize>, // index of emote to overlay, if any
 }
 
 const SPEED: f32 = 0.5;
@@ -196,7 +197,8 @@ fn render_fn(ui: &Ui) {
     let mut active_emotes = ACTIVE_EMOTES.lock().unwrap();
     let ndata = read_nexus_link().expect("Nexuslink to exist");
     let mut to_remove = Vec::new();
-    for (i, active_emote) in active_emotes.iter_mut().enumerate() {
+    for i in 0..active_emotes.len() {
+        let active_emote = &mut active_emotes[i];
         let texture = get_texture(&active_emote.identifier);
         if active_emote.gif.is_none() && texture.is_none() {
             check_gif(active_emote);
@@ -206,14 +208,23 @@ fn render_fn(ui: &Ui) {
             .map(EmoteType::from_texture)
             .or_else(|| active_emote.gif.take().map(EmoteType::from_gif))
             .expect("Texture or gif should exist here");
+        // If overlay_to is set, copy position from referenced emote
         if active_emote.position.is_none() {
-            let factual_width = ndata.width as f32 - texture.width() / 2.0;
-            let left_offset = factual_width * PADDING;
-            let right_offset = factual_width * (1.0 - PADDING);
-            active_emote.position = Some([
-                random_offset(left_offset..=right_offset) - texture.width() / 2.0,
-                ndata.height as f32,
-            ]);
+            if let Some(ref_idx) = active_emote.overlay_to {
+                if let Some(pos) = active_emotes.get(ref_idx).and_then(|e| e.position) {
+                    active_emote.position = Some(pos);
+                }
+            }
+            // If still none, randomize
+            if active_emote.position.is_none() {
+                let factual_width = ndata.width as f32 - texture.width() / 2.0;
+                let left_offset = factual_width * PADDING;
+                let right_offset = factual_width * (1.0 - PADDING);
+                active_emote.position = Some([
+                    random_offset(left_offset..=right_offset) - texture.width() / 2.0,
+                    ndata.height as f32,
+                ]);
+            }
         }
         if active_emote.start.is_none() {
             active_emote.start = Some(Instant::now());
@@ -275,18 +286,56 @@ fn find_file(files: &[File]) -> Option<&File> {
 fn process_message(chat: ChatMessageInfoOwned) {
     let emote_sets = EMOTE_SETS.lock().unwrap();
     let mut loaded = LOADED_EMOTES.lock().unwrap();
+    let mut last_emote_index: Option<usize> = None;
+    let mut last_was_emote: bool = false;
+    let mut active_emotes = ACTIVE_EMOTES.lock().unwrap();
     for word in chat.text.split_whitespace() {
+        let mut found_emote = false;
         for emote in emote_sets.iter().flat_map(|e| e.emotes.iter()) {
             if emote.name == word {
+                found_emote = true;
                 log::info!("Found emote {word} in chat message");
                 let identifier = format!("EMOTE_{word}");
-                ACTIVE_EMOTES.lock().unwrap().push(ActiveEmote {
-                    identifier: identifier.clone(),
-                    gif: None,
-                    position: None,
-                    start: None,
-                    start_offset: rand::random(),
-                });
+                let is_zero_width = emote.flags == 1;
+                if is_zero_width {
+                    // Only attach if previous word was a normal emote
+                    if last_was_emote {
+                        if let Some(idx) = last_emote_index {
+                            let prev = &active_emotes[idx];
+                            active_emotes.push(ActiveEmote {
+                                identifier: identifier.clone(),
+                                gif: None,
+                                position: prev.position,
+                                start: prev.start,
+                                start_offset: prev.start_offset,
+                            });
+                            last_emote_index = Some(active_emotes.len() - 1);
+                        }
+                        last_was_emote = false;
+                    } else {
+                        // Treat as normal emote if not directly after normal emote
+                        active_emotes.push(ActiveEmote {
+                            identifier: identifier.clone(),
+                            gif: None,
+                            position: None,
+                            start: None,
+                            start_offset: rand::random(),
+                        });
+                        last_emote_index = Some(active_emotes.len() - 1);
+                        last_was_emote = true;
+                    }
+                } else {
+                    // Normal emote, create new
+                    active_emotes.push(ActiveEmote {
+                        identifier: identifier.clone(),
+                        gif: None,
+                        position: None,
+                        start: None,
+                        start_offset: rand::random(),
+                    });
+                    last_emote_index = Some(active_emotes.len() - 1);
+                    last_was_emote = true;
+                }
                 if loaded.iter().any(|(l, _)| l == &identifier) {
                     continue;
                 }
@@ -301,9 +350,6 @@ fn process_message(chat: ChatMessageInfoOwned) {
                         log::error!("Failed to join url: {}", file.name);
                         continue;
                     };
-                    // just trigger load
-                    // there should be a load_texture_from_url function
-                    // but apparently the bindings don't expose it yet
                     loaded.push((identifier.clone(), None));
                     if emote.data.animated {
                         let lock = WORKER.wait().lock().unwrap();
@@ -324,16 +370,50 @@ fn process_message(chat: ChatMessageInfoOwned) {
                 }
             }
         }
+        if !found_emote {
+            last_was_emote = false;
+        }
     }
 }
 
-nexus::export! {
-    name: "Emote Chat",
-    signature: -69423,
-    flags: AddonFlags::None,
-    load,
-    unload,
-    provider: UpdateProvider::GitHub,
-    update_link: "https://github.com/belst/nexus-emotes",
-    log_filter: "warn,nexus_emotes=trace"
-}
+                if is_zero_width {
+                    // Only attach if previous word was a normal emote
+                    if last_was_emote {
+                        if let Some(idx) = last_emote_index {
+                            active_emotes.push(ActiveEmote {
+                                identifier: identifier.clone(),
+                                gif: None,
+                                position: None,
+                                start: None,
+                                start_offset: rand::random(),
+                                overlay_to: Some(idx),
+                            });
+                            last_emote_index = Some(active_emotes.len() - 1);
+                        }
+                        last_was_emote = false;
+                    } else {
+                        // Treat as normal emote if not directly after normal emote
+                        active_emotes.push(ActiveEmote {
+                            identifier: identifier.clone(),
+                            gif: None,
+                            position: None,
+                            start: None,
+                            start_offset: rand::random(),
+                            overlay_to: None,
+                        });
+                        last_emote_index = Some(active_emotes.len() - 1);
+                        last_was_emote = true;
+                    }
+                } else {
+                    // Normal emote, create new
+                    active_emotes.push(ActiveEmote {
+                        identifier: identifier.clone(),
+                        gif: None,
+                        position: None,
+                        start: None,
+                        start_offset: rand::random(),
+                        overlay_to: None,
+                    });
+                    last_emote_index = Some(active_emotes.len() - 1);
+                    last_was_emote = true;
+                }

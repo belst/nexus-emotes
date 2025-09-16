@@ -66,6 +66,13 @@ pub struct Emote {
     pub timestamp: u64,
     pub actor_id: Value, // using Value for unknown actor_id
     pub data: EmoteData,
+    }
+
+    impl Emote {
+        /// Returns true if this emote is Zero Width (flags == 1)
+        pub fn is_zero_width(&self) -> bool {
+            self.flags == 1
+        }
 }
 
 // Represents an emote set.
