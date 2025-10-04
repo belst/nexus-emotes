@@ -3,11 +3,12 @@ use crate::util::{UiExt, e};
 use anyhow::Result;
 use nexus::imgui::Ui;
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use strum::{EnumIter, VariantArray, VariantNames};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Diff<T: Debug + Clone + Hash + PartialEq + Eq> {
@@ -15,10 +16,19 @@ pub enum Diff<T: Debug + Clone + Hash + PartialEq + Eq> {
     Removed(T),
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, VariantArray, VariantNames)]
+pub enum ChatMessageSource {
+    #[default]
+    UnofficialExtras,
+    ChatEvents,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub emote_set_ids: Vec<String>,
     pub use_global: bool,
+    #[serde(default)]
+    pub chat_message_source: ChatMessageSource,
 }
 
 impl Default for Settings {
@@ -26,6 +36,7 @@ impl Default for Settings {
         Self {
             emote_set_ids: Vec::new(),
             use_global: true,
+            chat_message_source: ChatMessageSource::UnofficialExtras,
         }
     }
 }
@@ -64,8 +75,24 @@ impl Settings {
     ) -> Option<HashSet<Diff<String>>> {
         thread_local! {
             static DIFF: RefCell<HashSet<Diff<String>>> = RefCell::new(HashSet::new());
+            static CURRENT_ITEM: RefCell<usize> = RefCell::new(0);
+            static INITIALIZED: Cell<bool> = const { Cell::new(false) };
+        }
+        if !INITIALIZED.get() {
+            CURRENT_ITEM.set(match self.chat_message_source {
+                ChatMessageSource::UnofficialExtras => 0,
+                ChatMessageSource::ChatEvents => 1,
+            });
+            INITIALIZED.set(true);
         }
         let old_use_global = self.use_global;
+        CURRENT_ITEM.with_borrow_mut(|i| {
+            ui.combo_simple_string(
+                "Chat Event Source",
+                i,
+                <ChatMessageSource as VariantNames>::VARIANTS,
+            )
+        });
         ui.checkbox(e("Use global 7tv Emote Set"), &mut self.use_global);
         if ui.help_marker(|| {
             ui.tooltip_text(e("Enable 7tv global emote set. Click to open in browser"));
@@ -131,6 +158,10 @@ impl Settings {
         });
         drop(t);
         if ui.button(e("Save")) {
+            // TODO: replace message callback source in lib.rs
+            CURRENT_ITEM.with_borrow_mut(|i| {
+                self.chat_message_source = <ChatMessageSource as VariantArray>::VARIANTS[*i];
+            });
             Some(DIFF.take())
         } else {
             None

@@ -2,24 +2,32 @@
 
 use background::{RunningWorker, Worker};
 use giftex::{Gif, GifState};
-use nexus::arcdps::extras::message::{ChatMessageInfo, ChatMessageInfoOwned, RawChatMessageInfo};
+use nexus::arcdps::extras::message::{ChatMessageInfo, RawChatMessageInfo};
 use nexus::data_link::read_nexus_link;
 use nexus::gui::{RenderType, register_render, render};
 use nexus::imgui::{Condition, Image, Ui, Window};
 use nexus::paths::get_addon_dir;
 use nexus::texture::{Texture, get_texture, get_texture_or_create_from_url};
 use nexus::{AddonApi, event_consume};
-use nexus::{AddonFlags, UpdateProvider, event::extras::CHAT_MESSAGE};
+use nexus::{AddonFlags, UpdateProvider, event::extras::CHAT_MESSAGE as UE_CHAT_MESSAGE};
 use settings::{Diff, Settings};
 use seventv::{EmoteSet, File, FileFormat, download_emote_sets, get_emotes};
 use std::cell::Cell;
+use std::ffi::CStr;
 use std::ops::RangeInclusive;
+use std::os::raw::c_void;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 
+use crate::chat_events::{CHAT_MESSAGE as CE_CHAT_MESSAGE, Message, MessageType, RawMessage};
+use crate::chat_message::ChatMessage;
+use crate::settings::ChatMessageSource;
+
 mod background;
+mod chat_events;
+mod chat_message;
 mod giftex;
 mod settings;
 mod seventv;
@@ -87,10 +95,48 @@ fn load() {
     register_render(RenderType::Render, render!(render_fn)).revert_on_unload();
     register_render(RenderType::OptionsRender, render!(render_options)).revert_on_unload();
     // TODO: this event is not triggered, if you are already in a squad when logging in
-    CHAT_MESSAGE
+    UE_CHAT_MESSAGE
         .subscribe(event_consume!(|payload: Option<&RawChatMessageInfo>| {
             if let Some(payload) = payload {
-                chat_message(payload.into());
+                chat_message_ue(payload.into());
+            }
+        }))
+        .revert_on_unload();
+    // extern "C-unwind" fn event_callback(ptr: *const c_void) {
+    //     let payload = ptr as *const *const i8;
+    //     log::trace!("Decoded message: {:#04x?}", unsafe {
+    //         std::slice::from_raw_parts(*payload, 10)
+    //     });
+    // }
+    // unsafe { (AddonApi::get().event.subscribe)(c"EV_CHAT:Message".as_ptr(), event_callback) }
+    CE_CHAT_MESSAGE
+        .subscribe(event_consume!(|payload: Option<&RawMessage>| {
+            if let Some(payload) = payload {
+                log::trace!(
+                    "Received CE_CHAT_MESSAGE event (Size: {}): {payload:?}",
+                    std::mem::size_of_val(payload)
+                );
+                log::trace!("Raw Message content: {:04x?}", unsafe {
+                    std::slice::from_raw_parts(payload.content, 10)
+                });
+                log::trace!("Decoded message: {}", unsafe {
+                    CStr::from_ptr(payload.content).to_string_lossy()
+                });
+                log::trace!("Decoded Account name: {:02X?}", unsafe {
+                    if payload.r#type == MessageType::Squad as u8 {
+                        if payload.source.squad.source.account.is_null() {
+                            &[0]
+                        } else {
+                            std::slice::from_raw_parts(
+                                payload.source.squad.source.account as *const u8,
+                                10,
+                            )
+                        }
+                    } else {
+                        &[1]
+                    }
+                });
+                // chat_message_ce(payload);
             }
         }))
         .revert_on_unload();
@@ -99,6 +145,7 @@ fn load() {
 fn render_options(ui: &Ui) {
     let mut settings = Settings::get();
     let mut emote_sets = EMOTE_SETS.lock().unwrap();
+    // Check for source status here
     if let Some(diff) = settings.ui_and_save(emote_sets.as_slice(), ui) {
         settings.save(&setting_path()).unwrap();
         for d in diff {
@@ -261,9 +308,25 @@ fn unload() {
     drop(EMOTE_SETS.replace(Vec::new()));
 }
 
-fn chat_message(message: ChatMessageInfo<'_>) {
+fn chat_message_ue(message: ChatMessageInfo<'_>) {
+    if !matches!(
+        Settings::get().chat_message_source,
+        ChatMessageSource::UnofficialExtras
+    ) {
+        return;
+    }
     let message = message.to_owned();
-    process_message(message);
+    process_message(message.into());
+}
+fn chat_message_ce(message: &RawMessage) {
+    if !matches!(
+        Settings::get().chat_message_source,
+        ChatMessageSource::ChatEvents
+    ) {
+        return;
+    }
+    let message: Message = message.into();
+    process_message(message.into());
 }
 
 fn find_file(files: &[File]) -> Option<&File> {
@@ -272,10 +335,11 @@ fn find_file(files: &[File]) -> Option<&File> {
     })
 }
 
-fn process_message(chat: ChatMessageInfoOwned) {
+// TODO: filter based on source/settings
+fn process_message(chat: ChatMessage) {
     let emote_sets = EMOTE_SETS.lock().unwrap();
     let mut loaded = LOADED_EMOTES.lock().unwrap();
-    for word in chat.text.split_whitespace() {
+    for word in chat.content.split_whitespace() {
         for emote in emote_sets.iter().flat_map(|e| e.emotes.iter()) {
             if emote.name == word {
                 log::info!("Found emote {word} in chat message");
