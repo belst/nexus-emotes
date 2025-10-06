@@ -69,12 +69,10 @@ impl Settings {
         ui.checkbox(e("Use global 7tv Emote Set"), &mut self.use_global);
         if ui.help_marker(|| {
             ui.tooltip_text(e("Enable 7tv global emote set. Click to open in browser"));
-        }) {
-            if let Err(e) =
-                open::that_detached("https://7tv.app/emote-sets/01HKQT8EWR000ESSWF3625XCS4")
-            {
-                log::error!("Failed to open browser: {e}");
-            }
+        }) && let Err(e) =
+            open::that_detached("https://7tv.app/emote-sets/01HKQT8EWR000ESSWF3625XCS4")
+        {
+            log::error!("Failed to open browser: {e}");
         }
         if old_use_global != self.use_global {
             DIFF.with_borrow_mut(|d| {

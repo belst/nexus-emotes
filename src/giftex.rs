@@ -2,6 +2,7 @@ use nexus::imgui::Image;
 use nexus::imgui::TextureId;
 use nexus::imgui::Ui;
 use std::ffi::c_void;
+use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 use std::sync::Mutex;
 use std::{io::Read, time::Instant};
@@ -116,6 +117,10 @@ fn upload_gif_to_gpu(device: &ID3D11Device, gif: RawGif) -> anyhow::Result<Gif> 
     })
 }
 
+fn size_of_member<T>(_: &Vec<T>) -> usize {
+    std::mem::size_of::<T>()
+}
+
 pub fn load_gif(bytes: impl Read) -> anyhow::Result<RawGif> {
     log::trace!("Decoding gif");
     let now = Instant::now();
@@ -131,11 +136,15 @@ pub fn load_gif(bytes: impl Read) -> anyhow::Result<RawGif> {
         .map(|frame| {
             let frame = frame?;
             screen.blit_frame(&frame)?;
-            let data = screen.pixels_rgba().to_contiguous_buf();
-            Ok((
-                unsafe { std::mem::transmute(data.0.to_vec()) },
-                10.0 * frame.delay as f32,
-            ))
+            let mut v = screen.pixels_rgba().to_contiguous_buf().0.to_vec();
+            v.shrink_to_fit();
+            let v = ManuallyDrop::new(v);
+            let ptr = v.as_ptr() as *mut u8;
+            let len = v.len() * size_of_member(&v);
+            let cap = v.capacity() * size_of_member(&v);
+            let data = unsafe { Vec::from_raw_parts(ptr, len, cap) };
+
+            Ok((data, 10.0 * frame.delay as f32))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     log::trace!("Decoding gif took {}us", now.elapsed().as_micros());

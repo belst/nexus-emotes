@@ -311,7 +311,6 @@ fn process_message(chat: ChatMessageInfoOwned) {
                         worker.spawn(Box::new(move || {
                             if let Err(e) = Gif::load(identifier.clone(), url.as_str()) {
                                 log::error!("Failed to load gif: {e}");
-                                return;
                             };
                         }));
                     } else {
