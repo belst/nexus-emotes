@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use strum::{EnumIter, VariantArray, VariantNames};
+use strum::{VariantArray, VariantNames};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Diff<T: Debug + Clone + Hash + PartialEq + Eq> {

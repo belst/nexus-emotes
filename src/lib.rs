@@ -13,16 +13,13 @@ use nexus::{AddonFlags, UpdateProvider, event::extras::CHAT_MESSAGE as UE_CHAT_M
 use settings::{Diff, Settings};
 use seventv::{EmoteSet, File, FileFormat, download_emote_sets, get_emotes};
 use std::cell::Cell;
-use std::ffi::CStr;
 use std::ops::RangeInclusive;
-use std::os::raw::c_void;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 
-use crate::chat_events::{CHAT_MESSAGE as CE_CHAT_MESSAGE, Message, MessageType, RawMessage};
-use crate::chat_message::ChatMessage;
+use crate::chat_events::{CHAT_MESSAGE as CE_CHAT_MESSAGE, Message, raw::Message as RawMessage};
 use crate::settings::ChatMessageSource;
 
 mod background;
@@ -111,32 +108,8 @@ fn load() {
     // unsafe { (AddonApi::get().event.subscribe)(c"EV_CHAT:Message".as_ptr(), event_callback) }
     CE_CHAT_MESSAGE
         .subscribe(event_consume!(|payload: Option<&RawMessage>| {
-            if let Some(payload) = payload {
-                log::trace!(
-                    "Received CE_CHAT_MESSAGE event (Size: {}): {payload:?}",
-                    std::mem::size_of_val(payload)
-                );
-                log::trace!("Raw Message content: {:04x?}", unsafe {
-                    std::slice::from_raw_parts(payload.content, 10)
-                });
-                log::trace!("Decoded message: {}", unsafe {
-                    CStr::from_ptr(payload.content).to_string_lossy()
-                });
-                log::trace!("Decoded Account name: {:02X?}", unsafe {
-                    if payload.r#type == MessageType::Squad as u8 {
-                        if payload.source.squad.source.account.is_null() {
-                            &[0]
-                        } else {
-                            std::slice::from_raw_parts(
-                                payload.source.squad.source.account as *const u8,
-                                10,
-                            )
-                        }
-                    } else {
-                        &[1]
-                    }
-                });
-                // chat_message_ce(payload);
+            if let Some(&payload) = payload {
+                chat_message_ce(payload);
             }
         }))
         .revert_on_unload();
@@ -318,15 +291,21 @@ fn chat_message_ue(message: ChatMessageInfo<'_>) {
     let message = message.to_owned();
     process_message(message.into());
 }
-fn chat_message_ce(message: &RawMessage) {
+fn chat_message_ce(message: RawMessage) {
     if !matches!(
         Settings::get().chat_message_source,
         ChatMessageSource::ChatEvents
     ) {
         return;
     }
-    let message: Message = message.into();
-    process_message(message.into());
+    let message: Message = match message.try_into() {
+        Ok(message) => message,
+        Err(e) => {
+            log::error!("Failed to convert raw message to message: {e}");
+            return;
+        }
+    };
+    process_message(message);
 }
 
 fn find_file(files: &[File]) -> Option<&File> {
@@ -336,10 +315,13 @@ fn find_file(files: &[File]) -> Option<&File> {
 }
 
 // TODO: filter based on source/settings
-fn process_message(chat: ChatMessage) {
+fn process_message(chat: Message) {
+    let Some(content) = chat.content() else {
+        return;
+    };
     let emote_sets = EMOTE_SETS.lock().unwrap();
     let mut loaded = LOADED_EMOTES.lock().unwrap();
-    for word in chat.content.split_whitespace() {
+    for word in content.split_whitespace() {
         for emote in emote_sets.iter().flat_map(|e| e.emotes.iter()) {
             if emote.name == word {
                 log::info!("Found emote {word} in chat message");
