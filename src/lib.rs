@@ -11,7 +11,7 @@ use nexus::texture::{Texture, get_texture, get_texture_or_create_from_url};
 use nexus::{AddonApi, event_consume};
 use nexus::{AddonFlags, UpdateProvider, event::extras::CHAT_MESSAGE as UE_CHAT_MESSAGE};
 use settings::{Diff, Settings};
-use seventv::{EmoteSet, File, FileFormat, download_emote_sets, get_emotes};
+use seventv::{EmoteSet, download_emote_sets, get_emotes};
 use std::cell::Cell;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
@@ -37,9 +37,14 @@ fn setting_path() -> PathBuf {
 }
 
 #[derive(Debug, Clone)]
-struct ActiveEmote {
+struct EmoteLayer {
     identifier: String,
     gif: Option<GifState>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveEmote {
+    layers: (EmoteLayer, Option<EmoteLayer>),
     position: Option<[f32; 2]>,
     start: Option<Instant>,
     start_offset: f32,
@@ -177,7 +182,7 @@ impl EmoteType {
     }
 }
 
-fn check_gif(active_emote: &mut ActiveEmote) {
+fn check_gif(active_emote: &mut EmoteLayer) {
     if let Some(gif) = LOADED_EMOTES.lock().unwrap().iter_mut().find_map(|(l, r)| {
         if l == &active_emote.identifier {
             r.as_ref()
@@ -205,6 +210,33 @@ fn update_gifs(device: &ID3D11Device) {
     }
 }
 
+fn get_textures(active_emote: &mut ActiveEmote) -> Option<(EmoteType, Option<EmoteType>)> {
+    let texture_base = get_texture(&active_emote.layers.0.identifier);
+    if active_emote.layers.0.gif.is_none() && texture_base.is_none() {
+        check_gif(&mut active_emote.layers.0);
+        return None;
+    }
+    let texture_base = texture_base
+        .map(EmoteType::from_texture)
+        .or_else(|| active_emote.layers.0.gif.take().map(EmoteType::from_gif))
+        .expect("Texture or gif should exist here");
+
+    if let Some(overlay) = active_emote.layers.1.as_mut() {
+        let texture_overlay = get_texture(&overlay.identifier);
+        if overlay.gif.is_none() && texture_overlay.is_none() {
+            check_gif(overlay);
+            return None;
+        }
+        let texture_overlay = texture_overlay
+            .map(EmoteType::from_texture)
+            .or_else(|| overlay.gif.take().map(EmoteType::from_gif))
+            .expect("Texture or gif should exist here");
+        Some((texture_base, Some(texture_overlay)))
+    } else {
+        Some((texture_base, None))
+    }
+}
+
 fn render_fn(ui: &Ui) {
     let device = AddonApi::get().get_d3d11_device().expect("Device to exist");
     update_gifs(&device);
@@ -217,21 +249,21 @@ fn render_fn(ui: &Ui) {
     let ndata = read_nexus_link().expect("Nexuslink to exist");
     let mut to_remove = Vec::new();
     for (i, active_emote) in active_emotes.iter_mut().enumerate() {
-        let texture = get_texture(&active_emote.identifier);
-        if active_emote.gif.is_none() && texture.is_none() {
-            check_gif(active_emote);
+        let Some((base, overlay)) = get_textures(active_emote) else {
             continue;
-        }
-        let texture = texture
-            .map(EmoteType::from_texture)
-            .or_else(|| active_emote.gif.take().map(EmoteType::from_gif))
-            .expect("Texture or gif should exist here");
+        };
+        let width = overlay
+            .as_ref()
+            .map_or(base.width(), |o| o.width().max(base.width()));
+        let height = overlay
+            .as_ref()
+            .map_or(base.height(), |o| o.height().max(base.height()));
         if active_emote.position.is_none() {
-            let factual_width = ndata.width as f32 - texture.width() / 2.0;
+            let factual_width = ndata.width as f32 - width / 2.0;
             let left_offset = factual_width * PADDING;
             let right_offset = factual_width * (1.0 - PADDING);
             active_emote.position = Some([
-                random_offset(left_offset..=right_offset) - texture.width() / 2.0,
+                random_offset(left_offset..=right_offset) - width / 2.0,
                 ndata.height as f32,
             ]);
         }
@@ -240,7 +272,7 @@ fn render_fn(ui: &Ui) {
         }
         active_emote.simulate(elapsed);
         let pos = active_emote.get_position(ndata.width as f32 * PADDING / 2.0);
-        if (pos[1] + texture.height()) < 0.0 {
+        if (pos[1] + height) < 0.0 {
             to_remove.push(i);
         } else if let Some(_w) = Window::new(format!("EMOTE#{i}"))
             .no_decoration()
@@ -252,13 +284,29 @@ fn render_fn(ui: &Ui) {
             .position(pos, Condition::Always)
             .begin(ui)
         {
-            match texture {
+            ui.set_cursor_pos([(width - base.width()) / 2.0, (height - base.height()) / 2.0]);
+            match base {
                 EmoteType::Static(texture) => {
                     Image::new(texture.id(), texture.size()).build(ui);
                 }
                 EmoteType::Gif(mut gif) => {
                     gif.advance(ui);
-                    active_emote.gif = Some(gif);
+                    active_emote.layers.0.gif = Some(gif);
+                }
+            }
+            if let Some(overlay) = overlay {
+                ui.set_cursor_pos([
+                    (width - overlay.width()) / 2.0,
+                    (height - overlay.height()) / 2.0,
+                ]);
+                match overlay {
+                    EmoteType::Static(texture) => {
+                        Image::new(texture.id(), texture.size()).build(ui);
+                    }
+                    EmoteType::Gif(mut gif) => {
+                        gif.advance(ui);
+                        active_emote.layers.1.as_mut().unwrap().gif = Some(gif);
+                    }
                 }
             }
         }
@@ -308,36 +356,52 @@ fn chat_message_ce(message: RawMessage) {
     process_message(message);
 }
 
-fn find_file(files: &[File]) -> Option<&File> {
-    files.iter().find(|&f| {
-        [FileFormat::Gif, FileFormat::Png].contains(&f.format) && f.static_name.starts_with("3x")
-    })
-}
-
 // TODO: filter based on source/settings
 fn process_message(chat: Message) {
     let Some(content) = chat.content() else {
         return;
     };
-    let emote_sets = EMOTE_SETS.lock().unwrap();
     let mut loaded = LOADED_EMOTES.lock().unwrap();
+    let emote_sets = EMOTE_SETS.lock().unwrap();
+    let mut last_was_emote = false;
+    let mut active_emotes = ACTIVE_EMOTES.lock().unwrap();
     for word in content.split_whitespace() {
+        let mut is_emote = false;
+        // TODO: if an emote is in multiple sets, only the last one can have a zero
+        // width emote
         for emote in emote_sets.iter().flat_map(|e| e.emotes.iter()) {
             if emote.name == word {
                 log::info!("Found emote {word} in chat message");
                 let identifier = format!("EMOTE_{word}");
-                ACTIVE_EMOTES.lock().unwrap().push(ActiveEmote {
-                    identifier: identifier.clone(),
-                    gif: None,
-                    position: None,
-                    start: None,
-                    start_offset: rand::random(),
-                });
+                if last_was_emote && emote.zero_width() {
+                    log::info!("Found zero width emote {word}");
+                    let last = active_emotes
+                        .last_mut()
+                        .expect("Last Active Emote to Exist");
+                    last.layers.1 = Some(EmoteLayer {
+                        identifier: identifier.clone(),
+                        gif: None,
+                    });
+                } else {
+                    is_emote = true;
+                    active_emotes.push(ActiveEmote {
+                        layers: (
+                            EmoteLayer {
+                                identifier: identifier.clone(),
+                                gif: None,
+                            },
+                            None,
+                        ),
+                        position: None,
+                        start: None,
+                        start_offset: rand::random(),
+                    });
+                }
                 if loaded.iter().any(|(l, _)| l == &identifier) {
                     continue;
                 }
                 log::info!("Loading emote {word}");
-                if let Some(file) = find_file(&emote.data.host.files) {
+                if let Some(file) = emote.find_file() {
                     let Ok(url) = url::Url::parse(&format!("https:{}/", emote.data.host.url))
                     else {
                         log::error!("Failed to parse url: {}", emote.data.host.url);
@@ -369,6 +433,7 @@ fn process_message(chat: Message) {
                 }
             }
         }
+        last_was_emote = is_emote;
     }
 }
 

@@ -68,6 +68,19 @@ pub struct Emote {
     pub data: EmoteData,
 }
 
+impl Emote {
+    pub fn zero_width(&self) -> bool {
+        // TODO figure out if there are other flags
+        self.flags == 1
+    }
+    pub fn find_file(&self) -> Option<&File> {
+        self.data.host.files.iter().find(|&f| {
+            [FileFormat::Gif, FileFormat::Png].contains(&f.format)
+                && f.static_name.starts_with("3x")
+        })
+    }
+}
+
 // Represents an emote set.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EmoteSet {
