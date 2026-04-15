@@ -327,6 +327,11 @@ fn unload() {
         .join();
     drop(ACTIVE_EMOTES.replace(Vec::new()));
     drop(EMOTE_SETS.replace(Vec::new()));
+    // cannot unload textures loaded via nexus
+    // but we do need to release the gifs
+    // because we reload them regardless
+    // nexus textures will get reused on reload
+    drop(LOADED_EMOTES.replace(Vec::new()));
 }
 
 fn chat_message_ue(message: ChatMessageInfo<'_>) {
